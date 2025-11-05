@@ -2,7 +2,7 @@
   <Sdk Name="Aspire.AppHost.Sdk" Version="9.5.2" />
   <PropertyGroup>
     <OutputType>Exe</OutputType>
-    <TargetFramework>net8.0</TargetFramework>
+    <TargetFramework>net9.0</TargetFramework>
     <ImplicitUsings>enable</ImplicitUsings>
     <Nullable>enable</Nullable>
     <IsAspireHost>true</IsAspireHost>
@@ -11,6 +11,7 @@
   <ItemGroup>
     <ProjectReference Include="..\MessageBus.ApiService\MessageBus.ApiService.csproj" />
     <ProjectReference Include="..\MessageBus.Web\MessageBus.Web.csproj" />
+    <ProjectReference Include="..\MessageBus.Service\MessageBus.Service.csproj" />
   </ItemGroup>
   <ItemGroup>
     <PackageReference Include="Aspire.Hosting.AppHost" Version="9.5.2" />

@@ -53,4 +53,11 @@ var downstreamRabbitmq = builder.AddRabbitMQ("downstream-rabbitmq", rabbitmqUser
         endpoint.Port = 26000;
         endpoint.TargetPort = 15672;
     });
+var messageBusService = builder.AddProject<Projects.MessageBus_Service>("messageservice")
+    .WaitFor(upstreamRabbitmq)
+    .WaitFor(messageBusRabbitmq)
+    .WaitFor(downstreamRabbitmq)
+    .WithReference(upstreamRabbitmq)
+    .WithReference(messageBusRabbitmq)
+    .WithReference(downstreamRabbitmq);
 builder.Build().Run();
