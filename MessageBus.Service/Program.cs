@@ -3,6 +3,12 @@ using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
 using RabbitMQ.Client;
+using MessageBus.Service.Services;
+using MessageBus.Service.Services.MessageTargets;
+using MessageBus.Service.Middleware;
+using MessageBus.Service.Models;
+using MessageBus.Service.Models.Enums;
+using MessageBus.Service.Interfaces;
 
 var builder = WebApplication.CreateBuilder(args);
 builder.AddServiceDefaults();
@@ -12,7 +18,7 @@ builder.Services.AddKeyedSingleton("UpstreamMQClient", (sp, key) =>
     var config = sp.GetRequiredService<IConfiguration>();
     return new ConnectionFactory
     {
-        Uri = new Uri(config.GetConnectionString("upstream-rabbitmq")!)
+        Uri = new Uri(config.GetConnectionString("upstream-rabbitmq")!),
     };
 });
 
@@ -21,7 +27,7 @@ builder.Services.AddKeyedSingleton("MessageBusMQClient", (sp, key) =>
     var config = sp.GetRequiredService<IConfiguration>();
     return new ConnectionFactory
     {
-        Uri = new Uri(config.GetConnectionString("messagebus-rabbitmq")!)
+        Uri = new Uri(config.GetConnectionString("messagebus-rabbitmq")!),
     };
 });
 
@@ -30,23 +36,106 @@ builder.Services.AddKeyedSingleton("DownstreamMQClient", (sp, key) =>
     var config = sp.GetRequiredService<IConfiguration>();
     return new ConnectionFactory
     {
-        Uri = new Uri(config.GetConnectionString("downstream-rabbitmq")!)
+        Uri = new Uri(config.GetConnectionString("downstream-rabbitmq")!),
     };
 });
 
+// 注册消息路由服务
+builder.Services.AddSingleton<MessageRoutingMiddleware>();
+builder.Services.AddSingleton<BindingManager>();
+builder.Services.AddKeyedSingleton<IMessageTarget, RabbitMQMessageTarget>(EnumChannelType.RabbitMQ);
+
+
 var app = builder.Build();
 
-// 应用启动时确保所有队列存在
-app.Lifetime.ApplicationStarted.Register(() =>
+// 应用启动时初始化消息路由系统
+app.Lifetime.ApplicationStarted.Register(async () =>
 {
     using var scope = app.Services.CreateScope();
     var services = scope.ServiceProvider;
     
+    // 确保队列存在
     var upstreamFactory = services.GetRequiredKeyedService<ConnectionFactory>("UpstreamMQClient");
     var centerFactory = services.GetRequiredKeyedService<ConnectionFactory>("MessageBusMQClient");
     var downstreamFactory = services.GetRequiredKeyedService<ConnectionFactory>("DownstreamMQClient");
 
     EnsureQueuesExist(upstreamFactory, centerFactory, downstreamFactory);
+
+    var config = services.GetRequiredService<IConfiguration>();
+    // 注册消息源
+    var rabbitmqSource = new MessageSourceConfig
+    {
+        Id = Guid.NewGuid().GetHashCode(),
+        Name = "测试业务消息源",
+        Code = "test-biz-source",
+        SourceChannelType = EnumChannelType.RabbitMQ,
+        ConnectionString = config.GetConnectionString("upstream-rabbitmq")!,
+        TopicOrQueueName = "upstream.queue",
+        Enabled = true
+    };
+    
+    // 配置消息目标
+    var rabbitmqOrderTarget = new MessageTargetConfig
+    {
+        Id = Guid.NewGuid().GetHashCode(),
+        Name = "测试订单消息目标",
+        Code = "test-order-target",
+        TargetChannelType = EnumChannelType.RabbitMQ,
+        ConnectionString = config.GetConnectionString("downstream-rabbitmq")!,
+        ExchangeOrTopic = "order.exchange",
+        RoutingKey = "order.routingkey",
+        Enabled = true
+    };
+    
+    var rabbitmqInventoryTarget = new MessageTargetConfig
+    {
+        Id = Guid.NewGuid().GetHashCode(),
+        Name = "测试库存消息目标",
+        Code = "test-inventory-target",
+        TargetChannelType = EnumChannelType.RabbitMQ,
+        ConnectionString = config.GetConnectionString("downstream-rabbitmq")!,
+        ExchangeOrTopic = "inventory.exchange",
+        RoutingKey = "inventory.routingkey",
+        Enabled = true
+    };
+
+    // 配置绑定关系
+    var bindings = new List<SourceTargetBinding>
+    {
+        new() {
+            Id = Guid.NewGuid().GetHashCode(),
+            SourceId = rabbitmqSource.Id,
+            TargetId = rabbitmqOrderTarget.Id,
+            Enabled = true,
+        },
+        new() {
+            Id = Guid.NewGuid().GetHashCode(),
+            SourceId = rabbitmqSource.Id,
+            TargetId = rabbitmqInventoryTarget.Id,
+            Enabled = true,
+        }
+    };
+    
+    var bindingManager = services.GetRequiredService<BindingManager>();
+    // 注册到绑定管理器
+    bindingManager.AddSourceConfig(rabbitmqSource);
+    bindingManager.AddTargetConfig(rabbitmqOrderTarget);
+    bindingManager.AddTargetConfig(rabbitmqInventoryTarget);
+    foreach (var binding in bindings)
+    {
+        bindingManager.AddBinding(binding);
+    }
+
+    // 启动消息路由
+    var routingMiddleware = services.GetRequiredService<MessageRoutingMiddleware>();
+    await routingMiddleware.StartAsync();
+});
+
+app.Lifetime.ApplicationStopping.Register(async () =>
+{
+    using var scope = app.Services.CreateScope();
+    var routingMiddleware = scope.ServiceProvider.GetRequiredService<MessageRoutingMiddleware>();
+    await routingMiddleware.StopAsync();
 });
 
 app.Run();
