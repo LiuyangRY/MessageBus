@@ -96,43 +96,55 @@ public class BindingManager
     /// <summary>
     /// 构建消息源
     /// </summary>
-    /// <param name="config">消息源配置</param>
-    /// <returns>消息源实例</returns>
     private IMessageSource BuildMessageSource(MessageSourceConfig config)
     {
-        switch (config.SourceChannelType)
+        IMessageSource result = config.SourceChannelType switch
         {
-            case EnumChannelType.RabbitMQ:
-                var messageSource = new RabbitMQMessageSource(config);
-                messageSource.OnMessageReceived += async (message) =>
+            EnumChannelType.RabbitMQ => new RabbitMQMessageSource((RabbitMQMessageSourceConfig)config),
+            EnumChannelType.Kafka => new KafkaMessageSource((KafkaMessageSourceConfig)config),
+            _ => throw new NotSupportedException($"不支持的消息源类型: {config.SourceChannelType}"),
+        };
+        result.OnMessageReceived += async (message) =>
+        {
+            // 判断消息来源：如果MessageSourceId为空，说明是来自业务的消息源
+            // 如果MessageSourceId不为空，说明是来自消息中心的消息
+            if (message.MessageSourceId == 0)
+            {
+                // 来自业务消息源：设置MessageSourceId并发送到消息中心
+                message.MessageSourceId = config.Id;
+                
+                // 查找消息中心生产者（Kafka目标）
+                var messageCenterTarget = _messageTargets.Values.FirstOrDefault(config => config.IsMessageBusTarget);
+                if (messageCenterTarget != null)
                 {
-                    var targets = GetTargetsBySourceId(config.Id);
-                    foreach (var target in targets)
-                    {
-                        var messageTarget = _messageTargets[target.Id];
-                        await messageTarget.SendMessageAsync(message);
-                    }
-                    return true;
-                };
-                return messageSource;
-            default:
-                throw new NotSupportedException($"不支持的消息源类型: {config.SourceChannelType}");
-        }
+                    await messageCenterTarget.SendMessageAsync(message);
+                }
+            }
+            else
+            {
+                // 来自消息中心：直接获取绑定的目标进行转发
+                var targets = GetTargetsBySourceId(message.MessageSourceId);
+                foreach (var target in targets)
+                {
+                    var messageTarget = _messageTargets[target.Id];
+                    await messageTarget.SendMessageAsync(message);
+                }
+            }
+            return true;
+        };
+        return result;
     }
 
     /// <summary>
     /// 构建消息目标
     /// </summary>
-    /// <param name="config">消息目标配置</param>
-    /// <returns>消息目标实例</returns>
     private IMessageTarget BuildMessageTarget(MessageTargetConfig config)
     {
-        switch (config.TargetChannelType)
+        return config.TargetChannelType switch
         {
-            case EnumChannelType.RabbitMQ:
-                return new RabbitMQMessageTarget(config);
-            default:
-                throw new NotSupportedException($"不支持的消息目标类型: {config.TargetChannelType}");
-        }
+            EnumChannelType.RabbitMQ => new RabbitMQMessageTarget((RabbitMessageTargetConfig)config),
+            EnumChannelType.Kafka => new KafkaMessageTarget((KafkaMessageTargetConfig)config),
+            _ => throw new NotSupportedException($"不支持的消息目标类型: {config.TargetChannelType}"),
+        };
     }
 }

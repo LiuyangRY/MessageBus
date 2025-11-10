@@ -25,25 +25,10 @@ var upstreamRabbitmq = builder.AddRabbitMQ("upstream-rabbitmq", rabbitmqUserName
         endpoint.Port = 24000;
         endpoint.TargetPort = 15672;
     });
-var messageBusRabbitmq = builder.AddRabbitMQ("messagebus-rabbitmq", rabbitmqUserName, rabbitmqPassword)
-    .WithImage("rabbitmq:management")
-    .WithContainerName("messageBusRabbitmq")
-    .WithLifetime(ContainerLifetime.Persistent)
-    .WithExternalHttpEndpoints()
-    .WithEnvironment("TZ", "Asia/Shanghai")
-    .WithEnvironment("RABBITMQ_DEFAULT_USER", rabbitmqUserName)
-    .WithEnvironment("RABBITMQ_DEFAULT_PASS", rabbitmqPassword)
-    .WithEnvironment("RABBITMQ_LOOPBACK_USERS", "[]")
-    .WithEndpoint("rabbit-management", endpoint =>
-    {
-        endpoint.Port = 25000;
-        endpoint.TargetPort = 15672;
-    });
 var downstreamRabbitmq = builder.AddRabbitMQ("downstream-rabbitmq", rabbitmqUserName, rabbitmqPassword)
     .WithImage("rabbitmq:management")
     .WithContainerName("downstreamRabbitmq")
     .WithLifetime(ContainerLifetime.Persistent)
-    .WithExternalHttpEndpoints()
     .WithEnvironment("TZ", "Asia/Shanghai")
     .WithEnvironment("RABBITMQ_DEFAULT_USER", rabbitmqUserName)
     .WithEnvironment("RABBITMQ_DEFAULT_PASS", rabbitmqPassword)
@@ -53,11 +38,15 @@ var downstreamRabbitmq = builder.AddRabbitMQ("downstream-rabbitmq", rabbitmqUser
         endpoint.Port = 26000;
         endpoint.TargetPort = 15672;
     });
+var messageCenterKafka = builder.AddKafka("messagebus-kafka")
+    .WithContainerName("messageBusKafka")
+    .WithLifetime(ContainerLifetime.Persistent)
+    .WithKafkaUI();
 var messageBusService = builder.AddProject<Projects.MessageBus_Service>("messageservice")
     .WaitFor(upstreamRabbitmq)
-    .WaitFor(messageBusRabbitmq)
     .WaitFor(downstreamRabbitmq)
+    .WaitFor(messageCenterKafka)
     .WithReference(upstreamRabbitmq)
-    .WithReference(messageBusRabbitmq)
-    .WithReference(downstreamRabbitmq);
+    .WithReference(downstreamRabbitmq)
+    .WithReference(messageCenterKafka);
 builder.Build().Run();

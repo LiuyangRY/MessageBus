@@ -18,7 +18,7 @@ public class RabbitMQMessageSource : IMessageSource
 
     public event Func<MessageModel, Task<bool>>? OnMessageReceived;
 
-    public RabbitMQMessageSource(MessageSourceConfig messageSourceConfig)
+    public RabbitMQMessageSource(RabbitMQMessageSourceConfig messageSourceConfig)
     {
         var connectionFactory = new ConnectionFactory
         {
@@ -26,7 +26,7 @@ public class RabbitMQMessageSource : IMessageSource
         };
         _connection = connectionFactory.CreateConnection();
         _channel = _connection.CreateModel();
-        _queueName = messageSourceConfig.TopicOrQueueName;
+        _queueName = messageSourceConfig.QueueName;
     }
 
     public async Task StartConsumingAsync(CancellationToken cancellationToken = default)
@@ -41,10 +41,12 @@ public class RabbitMQMessageSource : IMessageSource
             try
             {
                 var body = ea.Body.ToArray();
-                var message = new MessageModel
+                var message = JsonSerializer.Deserialize<MessageModel>(System.Text.Encoding.UTF8.GetString(body));
+                if (message is null)
                 {
-                    Content = System.Text.Encoding.UTF8.GetString(body)
-                };
+                    _channel.BasicNack(ea.DeliveryTag, false, true);
+                    return;
+                }
 
                 if (OnMessageReceived is not null)
                 {

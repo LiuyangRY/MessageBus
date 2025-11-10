@@ -11,15 +11,18 @@ public class RabbitMQMessageTarget : IMessageTarget
     private readonly string _exchangeName;
     private readonly string _routingKey;
 
-    public RabbitMQMessageTarget(MessageTargetConfig targetConfig)
+    public bool IsMessageBusTarget { get; }
+
+    public RabbitMQMessageTarget(RabbitMessageTargetConfig targetConfig)
     {
+        IsMessageBusTarget = targetConfig.IsMessageBusTarget;
         var connectionFactory = new ConnectionFactory
         {
             Uri = new Uri(targetConfig.ConnectionString),
         };
         _connection = connectionFactory.CreateConnection();
         _channel = _connection.CreateModel();
-        _exchangeName = targetConfig.ExchangeOrTopic;
+        _exchangeName = targetConfig.ExchangeName;
         _routingKey = targetConfig.RoutingKey;
     }
 

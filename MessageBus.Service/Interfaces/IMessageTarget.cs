@@ -8,6 +8,11 @@ namespace MessageBus.Service.Interfaces;
 public interface IMessageTarget
 {
     /// <summary>
+    /// 是否是消息总线目标
+    /// </summary>
+    bool IsMessageBusTarget { get; }
+
+    /// <summary>
     /// 发送消息
     /// </summary>
     /// <param name="message">要发送的消息模型</param>

@@ -13,32 +13,8 @@ using MessageBus.Service.Interfaces;
 var builder = WebApplication.CreateBuilder(args);
 builder.AddServiceDefaults();
 
-builder.Services.AddKeyedSingleton("UpstreamMQClient", (sp, key) =>
-{
-    var config = sp.GetRequiredService<IConfiguration>();
-    return new ConnectionFactory
-    {
-        Uri = new Uri(config.GetConnectionString("upstream-rabbitmq")!),
-    };
-});
-
-builder.Services.AddKeyedSingleton("MessageBusMQClient", (sp, key) =>
-{
-    var config = sp.GetRequiredService<IConfiguration>();
-    return new ConnectionFactory
-    {
-        Uri = new Uri(config.GetConnectionString("messagebus-rabbitmq")!),
-    };
-});
-
-builder.Services.AddKeyedSingleton("DownstreamMQClient", (sp, key) =>
-{
-    var config = sp.GetRequiredService<IConfiguration>();
-    return new ConnectionFactory
-    {
-        Uri = new Uri(config.GetConnectionString("downstream-rabbitmq")!),
-    };
-});
+builder.AddKeyedRabbitMQClient("upstream-rabbitmq");
+builder.AddKeyedRabbitMQClient("downstream-rabbitmq");
 
 // 注册消息路由服务
 builder.Services.AddSingleton<MessageRoutingMiddleware>();
@@ -55,72 +31,125 @@ app.Lifetime.ApplicationStarted.Register(async () =>
     var services = scope.ServiceProvider;
     
     // 确保队列存在
-    var upstreamFactory = services.GetRequiredKeyedService<ConnectionFactory>("UpstreamMQClient");
-    var centerFactory = services.GetRequiredKeyedService<ConnectionFactory>("MessageBusMQClient");
-    var downstreamFactory = services.GetRequiredKeyedService<ConnectionFactory>("DownstreamMQClient");
+    var upstreamFactory = services.GetRequiredKeyedService<IConnectionFactory>("upstream-rabbitmq");
+    var downstreamFactory = services.GetRequiredKeyedService<IConnectionFactory>("downstream-rabbitmq");
 
-    EnsureQueuesExist(upstreamFactory, centerFactory, downstreamFactory);
+    EnsureQueuesExist(upstreamFactory, downstreamFactory);
 
     var config = services.GetRequiredService<IConfiguration>();
-    // 注册消息源
-    var rabbitmqSource = new MessageSourceConfig
+    
+    // ==================== 消息中心Kafka配置 ====================
+    
+    // 1. 配置消息中心Kafka消息消费者（接收所有业务消息源的消息）
+    var kafkaMessageBusConsumer = new KafkaMessageSourceConfig
     {
-        Id = Guid.NewGuid().GetHashCode(),
-        Name = "测试业务消息源",
-        Code = "test-biz-source",
-        SourceChannelType = EnumChannelType.RabbitMQ,
-        ConnectionString = config.GetConnectionString("upstream-rabbitmq")!,
-        TopicOrQueueName = "upstream.queue",
+        Id = 1001,
+        Name = "消息中心Kafka消息消费者",
+        Code = "message-bus-kafka-consumer",
+        GroupId = "message-bus-group",
+        SourceChannelType = EnumChannelType.Kafka,
+        ConnectionString = config.GetConnectionString("messagebus-kafka")!,
+        TopicName = "message-bus",
         Enabled = true
     };
     
-    // 配置消息目标
-    var rabbitmqOrderTarget = new MessageTargetConfig
+    // 2. 配置消息中心Kafka消息生产者（处理消息并路由到具体目标）
+    var kafkaMessageBusProducer = new KafkaMessageTargetConfig
     {
-        Id = Guid.NewGuid().GetHashCode(),
-        Name = "测试订单消息目标",
-        Code = "test-order-target",
+        IsMessageBusTarget = true,
+        Id = 2001,
+        Name = "消息中心Kafka消息生产者",
+        Code = "message-bus-kafka-producer",
+        TargetChannelType = EnumChannelType.Kafka,
+        ConnectionString = config.GetConnectionString("messagebus-kafka")!,
+        Topic = "message-bus",
+        Enabled = true
+    };
+    
+    // ==================== 业务消息源配置 ====================
+    
+    // 3. 配置业务RabbitMQ消息源（上游业务系统）
+    var rabbitmqBizSource = new RabbitMQMessageSourceConfig
+    {
+        Id = 1002,
+        Name = "业务系统RabbitMQ消息源",
+        Code = "biz-rabbitmq-source",
+        SourceChannelType = EnumChannelType.RabbitMQ,
+        ConnectionString = config.GetConnectionString("upstream-rabbitmq")!,
+        QueueName = "upstream.queue",
+        Enabled = true
+    };
+    
+    // ==================== 具体业务目标配置 ====================
+    
+    // 5. 配置订单业务RabbitMQ目标
+    var rabbitmqOrderTarget = new RabbitMessageTargetConfig
+    {
+        Id = 2002,
+        VirtualHost = "/",
+        Name = "订单业务RabbitMQ目标",
+        Code = "order-rabbitmq-target",
         TargetChannelType = EnumChannelType.RabbitMQ,
         ConnectionString = config.GetConnectionString("downstream-rabbitmq")!,
-        ExchangeOrTopic = "order.exchange",
+        ExchangeName = "downstream.exchange",
         RoutingKey = "order.routingkey",
         Enabled = true
     };
     
-    var rabbitmqInventoryTarget = new MessageTargetConfig
+    // 6. 配置库存业务RabbitMQ目标
+    var rabbitmqInventoryTarget = new RabbitMessageTargetConfig
     {
-        Id = Guid.NewGuid().GetHashCode(),
-        Name = "测试库存消息目标",
-        Code = "test-inventory-target",
+        Id = 2003,
+        VirtualHost = "/",
+        Name = "库存业务RabbitMQ目标",
+        Code = "inventory-rabbitmq-target",
         TargetChannelType = EnumChannelType.RabbitMQ,
         ConnectionString = config.GetConnectionString("downstream-rabbitmq")!,
-        ExchangeOrTopic = "inventory.exchange",
+        ExchangeName = "downstream.exchange",
         RoutingKey = "inventory.routingkey",
         Enabled = true
     };
 
-    // 配置绑定关系
+    // ==================== 绑定关系配置 ====================
+    
     var bindings = new List<SourceTargetBinding>
     {
+        // 消息中心Kafka消息生产者 -> 消息中心Kafka消息消费者（消息中心处理后路由到具体目标）
         new() {
-            Id = Guid.NewGuid().GetHashCode(),
-            SourceId = rabbitmqSource.Id,
-            TargetId = rabbitmqOrderTarget.Id,
+            Id = 3003,
+            SourceId = kafkaMessageBusProducer.Id, // 消息中心Kafka消息生产者
+            TargetId = kafkaMessageBusConsumer.Id, // 消息中心Kafka消息消费者
+            Enabled = true,
+        },
+        // 业务消息源 -> 业务消息目标（业务消息都发送到具体业务目标）
+        new() {
+            Id = 3001,
+            SourceId = rabbitmqBizSource.Id,        // 业务RabbitMQ源
+            TargetId = rabbitmqOrderTarget.Id,      // 订单业务目标
             Enabled = true,
         },
         new() {
-            Id = Guid.NewGuid().GetHashCode(),
-            SourceId = rabbitmqSource.Id,
-            TargetId = rabbitmqInventoryTarget.Id,
+            Id = 3002,
+            SourceId = rabbitmqBizSource.Id,        // 业务RabbitMQ源
+            TargetId = rabbitmqInventoryTarget.Id,  // 库存业务目标
             Enabled = true,
-        }
+        },
     };
     
     var bindingManager = services.GetRequiredService<BindingManager>();
-    // 注册到绑定管理器
-    bindingManager.AddSourceConfig(rabbitmqSource);
+    
+    // 注册消息中心配置
+    bindingManager.AddSourceConfig(kafkaMessageBusConsumer);
+    bindingManager.AddTargetConfig(kafkaMessageBusProducer);
+    
+    // 注册业务消息源配置
+    bindingManager.AddSourceConfig(rabbitmqBizSource);
+    
+    // 注册业务目标配置
     bindingManager.AddTargetConfig(rabbitmqOrderTarget);
     bindingManager.AddTargetConfig(rabbitmqInventoryTarget);
+    
+    // 注册绑定关系
     foreach (var binding in bindings)
     {
         bindingManager.AddBinding(binding);
@@ -143,14 +172,13 @@ app.Run();
 /// <summary>
 /// 确保所有队列存在，如果不存在则创建
 /// </summary>
-void EnsureQueuesExist(ConnectionFactory upstreamFactory, ConnectionFactory centerFactory, ConnectionFactory downstreamFactory)
+void EnsureQueuesExist(IConnectionFactory upstreamFactory, IConnectionFactory downstreamFactory)
 {
     try
     {
         Console.WriteLine("开始检查并创建队列...");
         
         EnsureUpstreamQueues(upstreamFactory);
-        EnsureCenterQueues(centerFactory);
         EnsureDownstreamQueues(downstreamFactory);
         
         Console.WriteLine("所有队列检查完成");
@@ -165,7 +193,7 @@ void EnsureQueuesExist(ConnectionFactory upstreamFactory, ConnectionFactory cent
 /// <summary>
 /// 创建或确保上游队列存在
 /// </summary>
-void EnsureUpstreamQueues(ConnectionFactory factory)
+void EnsureUpstreamQueues(IConnectionFactory factory)
 {
     using var connection = factory.CreateConnection();
     using var channel = connection.CreateModel();
@@ -182,47 +210,9 @@ void EnsureUpstreamQueues(ConnectionFactory factory)
 }
 
 /// <summary>
-/// 创建或确保消息中心队列存在
-/// </summary>
-void EnsureCenterQueues(ConnectionFactory factory)
-{
-    using var connection = factory.CreateConnection();
-    using var channel = connection.CreateModel();
-
-    // 创建主交换机和队列
-    CreateExchange(channel, "message-center.exchange", ExchangeType.Direct);
-    
-    var processQueueArgs = new Dictionary<string, object>
-    {  
-        {"x-dead-letter-exchange", "message-center.dlq.exchange"},
-        {"x-dead-letter-routing-key", "dlq.process"}
-    };
-    
-    CreateQueue(channel, "message-center.process.queue", 
-        exchange: "message-center.exchange", 
-        routingKey: "process",
-        arguments: processQueueArgs);
-
-    // 创建死信交换机和队列
-    CreateExchange(channel, "message-center.dlq.exchange", ExchangeType.Direct);
-    
-    var dlqArgs = new Dictionary<string, object>
-    {
-        {"x-queue-mode", "lazy"}
-    };
-    
-    CreateQueue(channel, "message-center.dlq", 
-        exchange: "message-center.dlq.exchange", 
-        routingKey: "dlq.process",
-        arguments: dlqArgs);
-    
-    Console.WriteLine("消息中心队列已确保存在");
-}
-
-/// <summary>
 /// 创建或确保下游队列存在
 /// </summary>
-void EnsureDownstreamQueues(ConnectionFactory factory)
+void EnsureDownstreamQueues(IConnectionFactory factory)
 {
     using var connection = factory.CreateConnection();
     using var channel = connection.CreateModel();
