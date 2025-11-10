@@ -34,7 +34,7 @@ public class KafkaMessageSource : IMessageSource
             AutoOffsetReset = AutoOffsetReset.Earliest,
             RetryBackoffMs = 1000,
             EnableAutoCommit = false,
-            AllowAutoCreateTopics = true  // 允许自动创建主题
+            AllowAutoCreateTopics = true
         };
         _consumer = new ConsumerBuilder<Ignore, MessageModel>(consumerConfig)
             .SetValueDeserializer(new MessageModelDeserializer())
@@ -66,7 +66,6 @@ public class KafkaMessageSource : IMessageSource
                 BootstrapServers = _bootstrapServers
             }).Build();
 
-            // 获取主题元数据来检查主题是否存在
             var metadata = adminClient.GetMetadata(TimeSpan.FromSeconds(10));
             var topicExists = metadata.Topics.Any(t => t.Topic == _topicName);
 
@@ -74,15 +73,15 @@ public class KafkaMessageSource : IMessageSource
             {
                 Console.WriteLine($"主题 '{_topicName}' 不存在，正在创建...");
 
-                await adminClient.CreateTopicsAsync(new[]
-                {
+                await adminClient.CreateTopicsAsync(
+                [
                     new TopicSpecification
                     {
                         Name = _topicName,
-                        NumPartitions = 3,           // 3个分区
-                        ReplicationFactor = 1        // 1个副本
+                        NumPartitions = 3,
+                        ReplicationFactor = 1
                     }
-                });
+                ]);
 
                 Console.WriteLine($"主题 '{_topicName}' 创建成功");
             }
@@ -199,11 +198,12 @@ public class MessageModelDeserializer : IDeserializer<MessageModel>
         }
         catch (Exception ex)
         {
-            Console.WriteLine($"MessageModel反序列化失败: {ex.Message}");
+            var errorMessage = $"反序列化失败: {ex.Message}，消息：{data.ToString()}";
+            Console.WriteLine(errorMessage);
             return new MessageModel
             {
                 MessageSourceId = 0,
-                Content = $"反序列化失败: {ex.Message}"
+                Content = errorMessage
             };
         }
     }

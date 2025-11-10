@@ -76,7 +76,7 @@ public class MessageModelSerializer : ISerializer<MessageModel>
 {
     public byte[] Serialize(MessageModel data, SerializationContext context)
     {
-        if (data == null)
+        if (data is null)
         {
             return null!;
         }
@@ -88,10 +88,8 @@ public class MessageModelSerializer : ISerializer<MessageModel>
         }
         catch (Exception ex)
         {
-            Console.WriteLine($"MessageModel序列化失败: {ex.Message}");
-            var errorMessage = new { Error = $"序列化失败: {ex.Message}", OriginalContent = data.Content };
-            var errorJson = JsonSerializer.Serialize(errorMessage);
-            return System.Text.Encoding.UTF8.GetBytes(errorJson);
+            Console.WriteLine($"MessageModel序列化失败: {ex.Message}，消息：{data.Content}");
+            throw;
         }
     }
 }

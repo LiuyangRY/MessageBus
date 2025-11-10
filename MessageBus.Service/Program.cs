@@ -21,7 +21,6 @@ builder.Services.AddSingleton<MessageRoutingMiddleware>();
 builder.Services.AddSingleton<BindingManager>();
 builder.Services.AddKeyedSingleton<IMessageTarget, RabbitMQMessageTarget>(EnumChannelType.RabbitMQ);
 
-
 var app = builder.Build();
 
 // 应用启动时初始化消息路由系统
