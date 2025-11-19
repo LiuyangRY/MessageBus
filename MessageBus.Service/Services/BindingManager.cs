@@ -102,6 +102,7 @@ public class BindingManager
         {
             EnumChannelType.RabbitMQ => new RabbitMQMessageSource((RabbitMQMessageSourceConfig)config),
             EnumChannelType.Kafka => new KafkaMessageSource((KafkaMessageSourceConfig)config),
+            EnumChannelType.RocketMQ => new RocketMQMessageSource((RocketMQMessageSourceConfig)config),
             _ => throw new NotSupportedException($"不支持的消息源类型: {config.SourceChannelType}"),
         };
         result.OnMessageReceived += async (message) =>
@@ -138,12 +139,13 @@ public class BindingManager
     /// <summary>
     /// 构建消息目标
     /// </summary>
-    private IMessageTarget BuildMessageTarget(MessageTargetConfig config)
+    private static IMessageTarget BuildMessageTarget(MessageTargetConfig config)
     {
         return config.TargetChannelType switch
         {
             EnumChannelType.RabbitMQ => new RabbitMQMessageTarget((RabbitMessageTargetConfig)config),
             EnumChannelType.Kafka => new KafkaMessageTarget((KafkaMessageTargetConfig)config),
+            EnumChannelType.RocketMQ => new RocketMQMessageTarget((RocketMQMessageTargetConfig)config),
             _ => throw new NotSupportedException($"不支持的消息目标类型: {config.TargetChannelType}"),
         };
     }

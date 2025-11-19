@@ -20,6 +20,7 @@ builder.AddKeyedRabbitMQClient("downstream-rabbitmq");
 builder.Services.AddSingleton<MessageRoutingMiddleware>();
 builder.Services.AddSingleton<BindingManager>();
 builder.Services.AddKeyedSingleton<IMessageTarget, RabbitMQMessageTarget>(EnumChannelType.RabbitMQ);
+builder.Services.AddKeyedSingleton<IMessageTarget, RocketMQMessageTarget>(EnumChannelType.RocketMQ); // 添加RocketMQ目标
 
 var app = builder.Build();
 
@@ -28,7 +29,7 @@ app.Lifetime.ApplicationStarted.Register(async () =>
 {
     using var scope = app.Services.CreateScope();
     var services = scope.ServiceProvider;
-    
+
     // 确保队列存在
     var upstreamFactory = services.GetRequiredKeyedService<IConnectionFactory>("upstream-rabbitmq");
     var downstreamFactory = services.GetRequiredKeyedService<IConnectionFactory>("downstream-rabbitmq");
@@ -36,9 +37,9 @@ app.Lifetime.ApplicationStarted.Register(async () =>
     EnsureQueuesExist(upstreamFactory, downstreamFactory);
 
     var config = services.GetRequiredService<IConfiguration>();
-    
+
     // ==================== 消息中心Kafka配置 ====================
-    
+
     // 1. 配置消息中心Kafka消息消费者（接收所有业务消息源的消息）
     var kafkaMessageBusConsumer = new KafkaMessageSourceConfig
     {
@@ -51,7 +52,7 @@ app.Lifetime.ApplicationStarted.Register(async () =>
         TopicName = "message-bus",
         Enabled = true
     };
-    
+
     // 2. 配置消息中心Kafka消息生产者（处理消息并路由到具体目标）
     var kafkaMessageBusProducer = new KafkaMessageTargetConfig
     {
@@ -64,9 +65,9 @@ app.Lifetime.ApplicationStarted.Register(async () =>
         Topic = "message-bus",
         Enabled = true
     };
-    
+
     // ==================== 业务消息源配置 ====================
-    
+
     // 3. 配置业务RabbitMQ消息源（上游业务系统）
     var rabbitmqBizSource = new RabbitMQMessageSourceConfig
     {
@@ -78,9 +79,9 @@ app.Lifetime.ApplicationStarted.Register(async () =>
         QueueName = "upstream.queue",
         Enabled = true
     };
-    
+
     // ==================== 具体业务目标配置 ====================
-    
+
     // 5. 配置订单业务RabbitMQ目标
     var rabbitmqOrderTarget = new RabbitMessageTargetConfig
     {
@@ -94,7 +95,7 @@ app.Lifetime.ApplicationStarted.Register(async () =>
         RoutingKey = "order.routingkey",
         Enabled = true
     };
-    
+
     // 6. 配置库存业务RabbitMQ目标
     var rabbitmqInventoryTarget = new RabbitMessageTargetConfig
     {
@@ -109,8 +110,37 @@ app.Lifetime.ApplicationStarted.Register(async () =>
         Enabled = true
     };
 
+    // 7. 配置RocketMQ业务消息源
+    var rocketmqBizSource = new RocketMQMessageSourceConfig
+    {
+        Id = 1003,
+        Name = "业务系统RocketMQ消息源",
+        Code = "biz-rocketmq-source",
+        ConsumerGroup = "biz-consumer-group",
+        SourceChannelType = EnumChannelType.RocketMQ,
+        ConnectionString = "localhost:9876",
+        TopicName = "biz-topic",
+        Tag = "biz-tag",
+        Enabled = true
+    };
+
+    // ==================== RocketMQ业务目标配置 ====================
+
+    // 8. 配置RocketMQ业务目标
+    var rocketmqBizTarget = new RocketMQMessageTargetConfig
+    {
+        Id = 2004,
+        Name = "RocketMQ业务目标",
+        Code = "rocketmq-biz-target",
+        TargetChannelType = EnumChannelType.RocketMQ,
+        ConnectionString = "localhost:9876",
+        Topic = "target-topic",
+        Tag = "target-tag",
+        Enabled = true
+    };
+
     // ==================== 绑定关系配置 ====================
-    
+
     var bindings = new List<SourceTargetBinding>
     {
         // 消息中心Kafka消息生产者 -> 消息中心Kafka消息消费者（消息中心处理后路由到具体目标）
@@ -133,21 +163,30 @@ app.Lifetime.ApplicationStarted.Register(async () =>
             TargetId = rabbitmqInventoryTarget.Id,  // 库存业务目标
             Enabled = true,
         },
+        // RocketMQ业务消息源 -> RocketMQ业务目标
+        new() {
+            Id = 3004,
+            SourceId = rocketmqBizSource.Id,        // RocketMQ业务源
+            TargetId = rocketmqBizTarget.Id,        // RocketMQ业务目标
+            Enabled = true,
+        },
     };
-    
+
     var bindingManager = services.GetRequiredService<BindingManager>();
-    
+
     // 注册消息中心配置
     bindingManager.AddSourceConfig(kafkaMessageBusConsumer);
     bindingManager.AddTargetConfig(kafkaMessageBusProducer);
-    
+
     // 注册业务消息源配置
     bindingManager.AddSourceConfig(rabbitmqBizSource);
-    
+    bindingManager.AddSourceConfig(rocketmqBizSource);
+
     // 注册业务目标配置
     bindingManager.AddTargetConfig(rabbitmqOrderTarget);
     bindingManager.AddTargetConfig(rabbitmqInventoryTarget);
-    
+    bindingManager.AddTargetConfig(rocketmqBizTarget);
+
     // 注册绑定关系
     foreach (var binding in bindings)
     {
@@ -176,10 +215,10 @@ void EnsureQueuesExist(IConnectionFactory upstreamFactory, IConnectionFactory do
     try
     {
         Console.WriteLine("开始检查并创建队列...");
-        
+
         EnsureUpstreamQueues(upstreamFactory);
         EnsureDownstreamQueues(downstreamFactory);
-        
+
         Console.WriteLine("所有队列检查完成");
     }
     catch (Exception ex)
@@ -199,12 +238,12 @@ void EnsureUpstreamQueues(IConnectionFactory factory)
 
     // 创建上游交换机
     CreateExchange(channel, "upstream.exchange", ExchangeType.Topic);
-    
+
     // 创建上游队列
-    CreateQueue(channel, "upstream.queue", 
-        exchange: "upstream.exchange", 
+    CreateQueue(channel, "upstream.queue",
+        exchange: "upstream.exchange",
         routingKey: "#");
-    
+
     Console.WriteLine("上游队列已确保存在");
 }
 
@@ -218,17 +257,17 @@ void EnsureDownstreamQueues(IConnectionFactory factory)
 
     // 创建下游交换机
     CreateExchange(channel, "downstream.exchange", ExchangeType.Topic);
-    
+
     // 创建订单队列
-    CreateQueue(channel, "downstream.order.queue", 
-        exchange: "downstream.exchange", 
+    CreateQueue(channel, "downstream.order.queue",
+        exchange: "downstream.exchange",
         routingKey: "order.#");
-    
+
     // 创建库存队列
-    CreateQueue(channel, "downstream.inventory.queue", 
-        exchange: "downstream.exchange", 
+    CreateQueue(channel, "downstream.inventory.queue",
+        exchange: "downstream.exchange",
         routingKey: "inventory.#");
-    
+
     Console.WriteLine("下游队列已确保存在");
 }
 
@@ -246,7 +285,7 @@ void CreateExchange(IModel channel, string exchangeName, string exchangeType)
             durable: true,      // 持久化
             autoDelete: false,  // 不自动删除
             arguments: null);
-        
+
         Console.WriteLine($"交换机 '{exchangeName}' 已确保存在");
     }
     catch (Exception ex)
@@ -259,7 +298,7 @@ void CreateExchange(IModel channel, string exchangeName, string exchangeType)
 /// <summary>
 /// 创建队列的通用方法（改进版本，避免通道关闭问题）
 /// </summary>
-void CreateQueue(IModel channel, string queueName, string exchange, string routingKey, 
+void CreateQueue(IModel channel, string queueName, string exchange, string routingKey,
     IDictionary<string, object>? arguments = null)
 {
     try
@@ -271,7 +310,7 @@ void CreateQueue(IModel channel, string queueName, string exchange, string routi
             exclusive: false,   // 非独占
             autoDelete: false,  // 不自动删除
             arguments: arguments);
-        
+
         Console.WriteLine($"队列 '{queueName}' 已确保存在");
 
         // 绑定队列到交换机
@@ -279,7 +318,7 @@ void CreateQueue(IModel channel, string queueName, string exchange, string routi
             queue: queueName,
             exchange: exchange,
             routingKey: routingKey);
-        
+
         Console.WriteLine($"队列 '{queueName}' 已绑定到交换机 '{exchange}'");
     }
     catch (Exception ex)

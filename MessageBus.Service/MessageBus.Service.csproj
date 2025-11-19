@@ -8,17 +8,12 @@
     </PropertyGroup>
 
     <ItemGroup>
-      <Reference Include="Microsoft.AspNetCore">
-        <HintPath>..\..\..\Program Files\dotnet\shared\Microsoft.AspNetCore.App\8.0.13\Microsoft.AspNetCore.dll</HintPath>
-      </Reference>
-    </ItemGroup>
-
-    <ItemGroup>
       <ProjectReference Include="..\MessageBus.ServiceDefaults\MessageBus.ServiceDefaults.csproj" />
     </ItemGroup>
     <ItemGroup>
         <PackageReference Include="Aspire.RabbitMQ.Client" Version="9.5.2" />
         <PackageReference Include="Aspire.Confluent.Kafka" Version="9.5.2" />
+        <PackageReference Include="RocketMQ.Client" Version="5.1.0" />
     </ItemGroup>
 
 </Project>
